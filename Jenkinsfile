@@ -99,7 +99,6 @@ pipeline {
                 docker {
                     image 'aquasec/trivy:0.74.0'
                     reuseNode true
-
                     args '''
                         --entrypoint=""
                         -e HOME=/tmp
@@ -231,7 +230,6 @@ pipeline {
 
                     echo "=== Application Package Created ==="
                     ls -lh latest-app.zip
-
                     echo "=== Package Content (ringkas) ==="
                     unzip -l latest-app.zip | head -n 40
                 '''
@@ -483,7 +481,7 @@ pipeline {
                             sleep 5
                         done
 
-                        echo "[VERIFY] ⚠️  Tidak merespons dalam 5 menit."
+                        echo "[VERIFY] ⚠️  Tidak merespons dalam 100 detik."
                         echo ""
                         echo "Interpretasi kode:"
                         echo "  curl_rc=28 http=000  → timeout (app listen tapi tidak merespons = zombie / startup lambat)"
@@ -509,11 +507,6 @@ pipeline {
                     echo "Aplikasi mungkin baru selesai startup beberapa detik setelahnya."
                     echo "Cek manual: https://ifs24039-pabwe2026-proyek1-be.s1if.cloud/api/v1/health"
                     echo "Kalau OK di browser → abaikan warning ini."
-                    echo ""
-                    echo "Jika ingin diagnosa lengkap, jalankan di server:"
-                    echo "  tail -n 100 logs/app.log"
-                    echo "  ps aux | grep bun"
-                    echo "  ss -ltnp | grep 5209"
                 }
             }
         }
@@ -556,11 +549,11 @@ pipeline {
             echo "       ❌ PIPELINE FAILED"
             echo "=========================================="
             echo "Result: ${currentBuild.currentResult}"
-            echo "Periksa log stage yang merah."
             echo ""
             echo "Petunjuk cepat:"
             echo " - Test merah      → jalankan 'bun test' di lokal"
             echo " - Trivy merah     → ada CVE HIGH/CRITICAL di dependency"
+            echo " - Quality Gate    → cek dashboard SonarQube (biasanya coverage)"
             echo " - Deploy merah    → cek WEBSITE_ID & DEPLOY_TOKEN di job config"
             echo " - Checkout gagal  → cek koneksi Git / credential github-ohmyhashmap"
         }
