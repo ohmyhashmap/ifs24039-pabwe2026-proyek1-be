@@ -46,9 +46,9 @@ safeWindowRoute.get('/', async (req, res) => {
     url.searchParams.set('longitude', String(lon));
     url.searchParams.set('hourly', 'pm2_5');
     url.searchParams.set('forecast_days', '2');
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`Open-Meteo gagal: HTTP ${res.status}`);
-    const data = AirQualityResponseSchema.parse(await res.json());
+    const apiRes = await fetch(url);
+    if (!apiRes.ok) throw new Error(`Open-Meteo gagal: HTTP ${apiRes.status}`);
+    const data = AirQualityResponseSchema.parse(await apiRes.json());
 
     const { startIndex, endIndex, averagePm25 } = findSafeWindow(data.hourly.time, data.hourly.pm2_5);
     const startValue = data.hourly.time[startIndex]!;

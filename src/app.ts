@@ -13,6 +13,18 @@ import { safeWindowRoute } from './routes/safeWindow';
 import { statsRoute } from './routes/stats';
 import { trajectoryRoute } from './routes/trajectory';
 
+// Di-export supaya bisa diuji langsung tanpa menyentuh internal Express
+// (`app._router` tidak stabil / bisa undefined di Express 5).
+export const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
+  // express.json() melempar SyntaxError (status 400) untuk body yang bukan JSON valid
+  if (error?.status === 400 || error instanceof SyntaxError) {
+    res.status(400).json({ success: false, error: 'Body bukan JSON valid' });
+    return;
+  }
+  console.error('[ERROR]', error);
+  res.status(500).json({ success: false, error: 'Terjadi kesalahan pada server' });
+};
+
 export function createApp() {
   const app = express();
 
@@ -41,15 +53,6 @@ export function createApp() {
     res.status(404).json({ success: false, error: 'Endpoint tidak ditemukan' });
   });
 
-  const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
-    // express.json() melempar SyntaxError (status 400) untuk body yang bukan JSON valid
-    if (error?.status === 400 || error instanceof SyntaxError) {
-      res.status(400).json({ success: false, error: 'Body bukan JSON valid' });
-      return;
-    }
-    console.error('[ERROR]', error);
-    res.status(500).json({ success: false, error: 'Terjadi kesalahan pada server' });
-  };
   app.use(errorHandler);
 
   return app;
