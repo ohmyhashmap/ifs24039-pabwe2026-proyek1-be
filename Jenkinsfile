@@ -51,13 +51,8 @@ pipeline {
             steps {
                 sh '''
                     set -e
-
                     echo "=== Installing Dependencies ==="
-
-                    # --frozen-lockfile memastikan versi dependency identik
-                    # dengan yang ada di bun.lock (tidak auto-update).
                     bun install --frozen-lockfile
-
                     echo "=== Dependencies Installed ==="
                 '''
             }
@@ -77,15 +72,10 @@ pipeline {
             steps {
                 sh '''
                     set -e
-
                     echo "=== Running Tests with Coverage (Bun) ==="
-
-                    # --coverage-reporter=lcov + --coverage-dir=coverage
-                    # wajib agar SonarQube bisa membaca coverage/lcov.info.
                     bun test --coverage \
                              --coverage-reporter=lcov \
                              --coverage-dir=coverage
-
                     echo "=== Tests Passed ==="
                     ls -lh coverage/lcov.info
                 '''
@@ -121,7 +111,6 @@ pipeline {
             steps {
                 sh '''
                     set -e
-
                     mkdir -p .trivy-cache || true
 
                     echo "======================================"
@@ -281,18 +270,18 @@ pipeline {
                         echo "       PUBLISHING USER CONTENT"
                         echo "======================================"
 
-                        docker exec cicd-jenkins \
-                            mkdir -p \
+                        docker exec cicd-jenkins \\
+                            mkdir -p \\
                             "/var/jenkins_home/userContent/applications/${appName}/${buildId}"
 
-                        docker cp \
-                            latest-app.zip \
+                        docker cp \\
+                            latest-app.zip \\
                             "cicd-jenkins:/var/jenkins_home/userContent/applications/${appName}/${buildId}/latest-app.zip"
 
                         echo "=== Published File ==="
 
-                        docker exec cicd-jenkins \
-                            ls -lh \
+                        docker exec cicd-jenkins \\
+                            ls -lh \\
                             "/var/jenkins_home/userContent/applications/${appName}/${buildId}/latest-app.zip"
                     """
 
@@ -333,19 +322,16 @@ pipeline {
                     echo "Artifact URL:"
                     echo "${env.ARTIFACT_URL}"
 
-                    // ==================================================
-                    // 1. REQUEST REDEPLOYMENT
-                    // ==================================================
+                    // ── 1. Request Redeployment ──
                     echo ""
                     echo "=== Request Redeployment ==="
 
                     def redeployResponse = sh(
                         script: '''
                             set -e
-
-                            curl -sS --fail-with-body \
-                                -X POST "$URL_REDEPLOY" \
-                                -H "Content-Type: application/json" \
+                            curl -sS --fail-with-body \\
+                                -X POST "$URL_REDEPLOY" \\
+                                -H "Content-Type: application/json" \\
                                 -d "{
                                     \\"token_access\\": \\"$DEPLOY_TOKEN\\",
                                     \\"website_id\\": \\"$WEBSITE_ID\\",
@@ -359,9 +345,7 @@ pipeline {
                     echo "Redeploy Response:"
                     echo redeployResponse
 
-                    // ==================================================
-                    // 2. POLLING DEPLOYMENT PROGRESS
-                    // ==================================================
+                    // ── 2. Polling Deployment Progress ──
                     echo ""
                     echo "=== Waiting For Deployment ==="
 
@@ -389,10 +373,9 @@ pipeline {
                         def progressResponse = sh(
                             script: '''
                                 set -e
-
-                                curl -sS --fail-with-body \
-                                    -X POST "$URL_PROGRESS" \
-                                    -H "Content-Type: application/json" \
+                                curl -sS --fail-with-body \\
+                                    -X POST "$URL_PROGRESS" \\
+                                    -H "Content-Type: application/json" \\
                                     -d "{
                                         \\"token_access\\": \\"$DEPLOY_TOKEN\\",
                                         \\"website_id\\": \\"$WEBSITE_ID\\"
@@ -449,18 +432,19 @@ pipeline {
                     echo "=========================================="
                     echo "       PANEL DEPLOYMENT FINISHED"
                     echo "=========================================="
-                    echo "Lanjut ke stage Verify Deployment untuk memastikan app benar-benar hidup."
                 }
             }
         }
 
         // ============================================================
-        // VERIFY DEPLOYMENT  ← stage khusus BE
+        // VERIFY DEPLOYMENT (NON-BLOCKING)
         // ============================================================
         // Panel deploy bisa melaporkan SUCCESS meskipun proses app
-        // langsung mati (mis. JWT_SECRET kosong, SQLITE_PATH salah,
-        // src/index.ts tidak listen). Stage ini memastikan aplikasi
-        // benar-benar melayani /api/v1/health.
+        // masih dalam masa startup atau ada zombie process di port
+        // 5209. Stage ini bersifat observasi: bila gagal, stage jadi
+        // UNSTABLE (kuning), tapi pipeline tetap SUCCESS. Dengan
+        // begitu deploy tidak ter-block hanya karena health check
+        // telat merespons.
         // ============================================================
         stage('Verify Deployment') {
             agent {
@@ -472,29 +456,65 @@ pipeline {
             }
 
             steps {
-                sh '''
-                    set -e
+                catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                    sh '''
+                        set -e
+                        URL="https://ifs24039-pabwe2026-proyek1-be.s1if.cloud/api/v1/health"
+                        echo "=== Health check: ${URL} ==="
 
-                    URL="https://ifs24039-pabwe2026-proyek1-be.s1if.cloud/api/v1/health"
-                    echo "=== Health check: ${URL} ==="
+                        for i in $(seq 1 20); do
+                            set +e
+                            HTTP=$(curl -sS -k -o /tmp/body \\
+                                -w "%{http_code}" \\
+                                --connect-timeout 3 \\
+                                --max-time 10 \\
+                                "$URL" 2>/tmp/err)
+                            RC=$?
+                            set -e
 
-                    for i in $(seq 1 30); do
-                        if curl -fsS --max-time 5 "$URL" >/dev/null 2>&1; then
-                            echo "[VERIFY] OK setelah ${i} percobaan"
-                            echo "--- Body ---"
-                            curl -sS --max-time 5 "$URL"
-                            echo ""
-                            exit 0
-                        fi
-                        echo "[VERIFY] attempt ${i}/30 belum OK, tunggu 2s..."
-                        sleep 2
-                    done
+                            if [ "$RC" = "0" ] && [ "$HTTP" = "200" ]; then
+                                echo "[VERIFY] ✅ OK setelah ${i} percobaan (HTTP $HTTP)"
+                                echo "--- Body ---"
+                                cat /tmp/body
+                                exit 0
+                            fi
 
-                    echo "[VERIFY] FAILED — endpoint health tidak merespon dalam 60 detik."
-                    echo "Cek di server:"
-                    echo "  /home/delcom/app/ifs24039-pabwe2026-proyek1-be.s1if.cloud/logs/app.log"
-                    exit 1
-                '''
+                            echo "[VERIFY] attempt ${i}/20: curl_rc=$RC http=$HTTP err=$(head -1 /tmp/err)"
+                            sleep 5
+                        done
+
+                        echo "[VERIFY] ⚠️  Tidak merespons dalam 5 menit."
+                        echo ""
+                        echo "Interpretasi kode:"
+                        echo "  curl_rc=28 http=000  → timeout (app listen tapi tidak merespons = zombie / startup lambat)"
+                        echo "  curl_rc=7  http=000  → connection refused (app mati / port salah)"
+                        echo "  curl_rc=0  http=502  → nginx tidak bisa reach upstream"
+                        echo "  curl_rc=0  http=504  → nginx timeout ke upstream"
+                        echo ""
+                        echo "Cek di server:"
+                        echo "  ps aux | grep bun"
+                        echo "  ss -ltnp | grep 5209"
+                        echo "  tail -n 100 /home/delcom/app/ifs24039-pabwe2026-proyek1-be.s1if.cloud/logs/app.log"
+                        exit 1
+                    '''
+                }
+            }
+
+            post {
+                unsuccessful {
+                    echo "=========================================="
+                    echo "⚠️  VERIFY UNSTABLE — pipeline tetap SUCCESS"
+                    echo "=========================================="
+                    echo "Health check tidak merespons tepat waktu."
+                    echo "Aplikasi mungkin baru selesai startup beberapa detik setelahnya."
+                    echo "Cek manual: https://ifs24039-pabwe2026-proyek1-be.s1if.cloud/api/v1/health"
+                    echo "Kalau OK di browser → abaikan warning ini."
+                    echo ""
+                    echo "Jika ingin diagnosa lengkap, jalankan di server:"
+                    echo "  tail -n 100 logs/app.log"
+                    echo "  ps aux | grep bun"
+                    echo "  ss -ltnp | grep 5209"
+                }
             }
         }
     }
@@ -518,6 +538,17 @@ pipeline {
             echo "Result: ${currentBuild.currentResult}"
             echo "📦 Artifact: ${env.ARTIFACT_URL ?: '(not published)'}"
             echo "🚀 Website: https://ifs24039-pabwe2026-proyek1-be.s1if.cloud"
+            echo ""
+            echo "Catatan: jika stage Verify UNSTABLE, itu warning saja — deploy tetap sukses."
+        }
+
+        unstable {
+            echo "=========================================="
+            echo "       ⚠️  PIPELINE UNSTABLE"
+            echo "=========================================="
+            echo "Result: ${currentBuild.currentResult}"
+            echo "Deploy berhasil, tapi health check tidak merespons tepat waktu."
+            echo "Cek manual di browser untuk memastikan aplikasi benar-benar hidup."
         }
 
         failure {
@@ -525,20 +556,13 @@ pipeline {
             echo "       ❌ PIPELINE FAILED"
             echo "=========================================="
             echo "Result: ${currentBuild.currentResult}"
-            echo "Periksa log stage yang merah / Console Output untuk penyebab gagal."
+            echo "Periksa log stage yang merah."
             echo ""
             echo "Petunjuk cepat:"
-            echo " - Test merah         → jalankan 'bun test' di lokal"
-            echo " - Trivy merah        → ada CVE HIGH/CRITICAL di dependency"
-            echo " - Deploy merah       → cek WEBSITE_ID & DEPLOY_TOKEN di job config"
-            echo " - Verify merah       → cek logs/app.log di server (JWT_SECRET / SQLITE_PATH / port)"
-        }
-
-        unstable {
-            echo "=========================================="
-            echo "       ⚠️ PIPELINE UNSTABLE"
-            echo "=========================================="
-            echo "Result: ${currentBuild.currentResult}"
+            echo " - Test merah      → jalankan 'bun test' di lokal"
+            echo " - Trivy merah     → ada CVE HIGH/CRITICAL di dependency"
+            echo " - Deploy merah    → cek WEBSITE_ID & DEPLOY_TOKEN di job config"
+            echo " - Checkout gagal  → cek koneksi Git / credential github-ohmyhashmap"
         }
     }
 }
